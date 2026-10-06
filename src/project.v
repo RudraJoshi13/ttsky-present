@@ -3,7 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Tiny Tapeout wrapper around the PRESENT-80 encryption core
- * by Saied H. Khayat (MIT licence), used unchanged.
+ * by Saied H. Khayat (MIT licence). The cipher logic is unchanged; the only
+ * edit is line 26 of present_encrypt.v, where the simulation-only debug print
+ * (`define PRINT_TEST_VECTORS) is commented out, because LibreLane reads
+ * Verilog with Yosys -noautowire, which rejects the print's use of $time.
  */
 
 `default_nettype none

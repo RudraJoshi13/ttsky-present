@@ -11,8 +11,10 @@ You can also include images in this folder and reference them in the markdown. E
 
 This project puts the PRESENT block cipher on Tiny Tapeout. PRESENT (Bogdanov et al., CHES 2007) is a
 lightweight cipher standardised in ISO/IEC 29192-2. The design uses the PRESENT-80 encryption core by
-Saied H. Khayat ([saiedhk/PresentCryptoEngine](https://github.com/saiedhk/PresentCryptoEngine), MIT licence)
-without changes: a 64-bit block, an 80-bit key and 31 rounds, one round per clock. It encrypts only.
+Saied H. Khayat ([saiedhk/PresentCryptoEngine](https://github.com/saiedhk/PresentCryptoEngine), MIT licence):
+a 64-bit block, an 80-bit key and 31 rounds, one round per clock. It encrypts only. The cipher logic is
+unchanged; the only edit is that the core's simulation-only debug print is switched off (line 26 of
+`present_encrypt.v`), because the hardening flow's Verilog reader rejects the `$time` it uses.
 
 Tiny Tapeout has 24 I/O pins, so a wrapper gives the core a byte-wide register interface. The key and
 plaintext are written one byte at a time, an encryption is started with a control write, and the ciphertext is

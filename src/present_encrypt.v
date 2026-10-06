@@ -23,7 +23,7 @@
 `timescale 1ns/1ps
 
 //`define DEBUG
-`define PRINT_TEST_VECTORS
+//`define PRINT_TEST_VECTORS
 
 module PRESENT_ENCRYPT (
         output [63:0] odat,   // data output port
