@@ -104,3 +104,160 @@ async def test_present(dut):
         got = await encrypt(dut, pt, key)
         dut._log.info(f"pt={pt:016x} key={key:020x} ct={got:016x} expected={ct:016x}")
         assert got == ct
+
+
+# ---------------------------------------------------------------------
+# Additional tests for coverage (each checks one behaviour)
+# ---------------------------------------------------------------------
+
+async def pulse_reset(dut):
+    """Hold rst_n low for 10 clocks, release it, wait 2 clocks."""
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 10)
+    dut.rst_n.value = 1
+    await ClockCycles(dut.clk, 2)
+
+
+async def start_clock_and_reset(dut):
+    """Start a 50 MHz clock, set the inputs to idle and reset."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    dut.ena.value = 1
+    dut.ui_in.value = 0
+    dut.uio_in.value = 0
+    await pulse_reset(dut)
+
+
+async def check_cleared(dut):
+    """Every register reads as after reset; the ID is unchanged."""
+    assert await read_bytes(dut, A_KEY, 10) == 0, "key not cleared"
+    assert await read_bytes(dut, A_PT, 8) == 0, "plaintext not cleared"
+    assert await read_bytes(dut, A_CT, 8) == 0, "ciphertext not cleared"
+    assert await read_byte(dut, A_CTRL) == 0x00, "status not cleared"
+    assert await read_byte(dut, A_ID) == 0x50, "ID changed"
+
+
+@cocotb.test()
+async def test_reset_clears_state(dut):
+    """Reset after an encryption and reset during one both clear all
+    registers, and the next encryption is still correct."""
+    await start_clock_and_reset(dut)
+
+    # 1) Reset after a finished encryption. This vector's ciphertext has
+    #    bits 16 and 55 set, so the reset also takes them from 1 to 0.
+    pt, key, ct = EXTRA[4]
+    assert await encrypt(dut, pt, key) == ct
+    await pulse_reset(dut)
+    await check_cleared(dut)
+    dut._log.info("reset after encryption: all registers cleared")
+
+    # 2) Reset while busy: load, start, confirm busy, then reset.
+    pt, key, ct = OFFICIAL[3]
+    await write_bytes(dut, A_KEY, key, 10)
+    await write_bytes(dut, A_PT, pt, 8)
+    await write_byte(dut, A_CTRL, 0x01)
+    assert await read_byte(dut, A_CTRL) == 0x01, "expected busy before reset"
+    await pulse_reset(dut)
+    await check_cleared(dut)
+    dut._log.info("reset during encryption: all registers cleared")
+
+    # 3) The design still works normally after both resets.
+    pt, key, ct = OFFICIAL[0]
+    assert await encrypt(dut, pt, key) == ct
+    dut._log.info("encryption after resets: correct")
+
+
+@cocotb.test()
+async def test_register_rules(dut):
+    """Unused addresses read 0; writes to read-only and unused addresses
+    are ignored; a start write needs bit 0; a held strobe starts only
+    once; the unused inputs ui_in[5] and ui_in[6] have no effect."""
+    await start_clock_and_reset(dut)
+    pt, key, ct = OFFICIAL[1]
+    assert await encrypt(dut, pt, key) == ct  # known state: done = 1
+
+    # 1) Unused addresses read as 0.
+    for a in range(0x1C, 0x20):
+        assert await read_byte(dut, a) == 0x00, f"address {a:#04x} not 0"
+
+    # 2) Writes to ciphertext, ID and unused addresses are ignored.
+    for a in list(range(A_CT, A_CT + 8)) + [A_ID] + list(range(0x1C, 0x20)):
+        await write_byte(dut, a, 0xA5)
+    assert await read_bytes(dut, A_CT, 8) == ct, "ciphertext changed by a write"
+    assert await read_byte(dut, A_ID) == 0x50, "ID changed by a write"
+    for a in range(0x1C, 0x20):
+        assert await read_byte(dut, a) == 0x00, "unused address changed"
+    assert await read_bytes(dut, A_KEY, 10) == key, "key changed"
+    assert await read_bytes(dut, A_PT, 8) == pt, "plaintext changed"
+    assert await read_byte(dut, A_CTRL) == 0x02, "status changed"
+    dut._log.info("unused reads are 0, read-only and unused writes ignored")
+
+    # 3) A control write with bit 0 = 0 does not start an encryption.
+    await write_byte(dut, A_CTRL, 0xFE)
+    assert await read_byte(dut, A_CTRL) == 0x02, "started without bit 0"
+    dut._log.info("start write without bit 0: no start")
+
+    # 4) Strobe held high on a start for 100 clocks: busy rises once.
+    dut.uio_in.value = 0x01
+    dut.ui_in.value = STROBE | A_CTRL
+    rises, prev = 0, 0
+    for _ in range(100):
+        await ClockCycles(dut.clk, 1)
+        busy = dut.uo_out.value.to_unsigned() & 1
+        if busy and not prev:
+            rises += 1
+        prev = busy
+    dut.ui_in.value = A_CTRL
+    await ClockCycles(dut.clk, 2)
+    assert rises == 1, f"busy rose {rises} times with the strobe held"
+    assert await read_byte(dut, A_CTRL) == 0x02, "not done after held strobe"
+    assert await read_bytes(dut, A_CT, 8) == ct, "wrong ciphertext after held strobe"
+    dut._log.info("strobe held 100 clocks: exactly one encryption")
+
+    # 5) The unused inputs ui_in[5] and ui_in[6] have no effect.
+    dut.ui_in.value = 0x60 | A_ID
+    await ClockCycles(dut.clk, 2)
+    assert dut.uo_out.value.to_unsigned() == 0x50, "ui_in[6:5] changed the read"
+    dut.ui_in.value = A_ID
+    await ClockCycles(dut.clk, 2)
+    dut._log.info("ui_in[5] and ui_in[6] ignored")
+
+
+async def wait_done(dut):
+    """Poll the status register until done = 1 and busy = 0."""
+    for _ in range(100):
+        if await read_byte(dut, A_CTRL) == 0x02:
+            return
+    assert False, "timeout waiting for done"
+
+
+@cocotb.test()
+async def test_busy_protection(dut):
+    """While an encryption runs, a second start is ignored and key and
+    plaintext writes do not change its result. The new values are kept
+    and used by the next start."""
+    await start_clock_and_reset(dut)
+    pt, key, ct = EXTRA[1]
+    await write_bytes(dut, A_KEY, key, 10)
+    await write_bytes(dut, A_PT, pt, 8)
+    await write_byte(dut, A_CTRL, 0x01)  # start
+
+    # While busy: a second start, a new top key byte and plaintext byte.
+    await write_byte(dut, A_CTRL, 0x01)
+    await write_byte(dut, A_KEY, 0x5A)
+    await write_byte(dut, A_PT, 0xC3)
+    assert await read_byte(dut, A_CTRL) == 0x01, "not busy: writes did not land during the encryption"
+
+    # The running encryption is unaffected.
+    await wait_done(dut)
+    assert await read_bytes(dut, A_CT, 8) == ct, "result changed by writes during encryption"
+    dut._log.info("writes and a second start while busy: result unchanged")
+
+    # The new values were stored and the next start uses them.
+    # Expected ciphertext from the Oosterlynck/Teuwen Python reference.
+    key2, pt2, ct2 = 0x5A14F4D8C37D9CC7E689, 0xC381DCB8A883A38C, 0x18D24C5631480B99
+    assert await read_bytes(dut, A_KEY, 10) == key2, "new key byte not stored"
+    assert await read_bytes(dut, A_PT, 8) == pt2, "new plaintext byte not stored"
+    await write_byte(dut, A_CTRL, 0x01)
+    await wait_done(dut)
+    assert await read_bytes(dut, A_CT, 8) == ct2, "wrong result with the new values"
+    dut._log.info("next start uses the new key and plaintext: correct")
