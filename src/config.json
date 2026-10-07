@@ -29,7 +29,7 @@
   "GRT_DESIGN_REPAIR_MAX_SLEW_PCT": 50,
   "GRT_DESIGN_REPAIR_MAX_CAP_PCT": 50,
 
-  "//": "PnR steps use pnr.sdc: TT base.sdc with slew target 0.5 ns. Signoff still uses TT base.sdc (0.75 ns).",
+  "//": "PnR steps use pnr.sdc: TT base.sdc with slew target 0.5 ns and fanout target 8. Signoff uses signoff.sdc (TT base.sdc: 0.75 ns, fanout 10).",
   "PNR_SDC_FILE": "dir::pnr.sdc",
 
   "//": "Signoff STA uses signoff.sdc (TT base.sdc, 0.75 ns). If this is not set, signoff reuses pnr.sdc.",
