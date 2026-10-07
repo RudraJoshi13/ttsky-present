@@ -32,6 +32,9 @@
   "//": "PnR steps use pnr.sdc: TT base.sdc with slew target 0.5 ns. Signoff still uses TT base.sdc (0.75 ns).",
   "PNR_SDC_FILE": "dir::pnr.sdc",
 
+  "//": "Signoff STA uses signoff.sdc (TT base.sdc, 0.75 ns). If this is not set, signoff reuses pnr.sdc.",
+  "SIGNOFF_SDC_FILE": "dir::signoff.sdc",
+
   "//": "Hold slack margin - Increase them in case you are getting hold violations.",
   "PL_RESIZER_HOLD_SLACK_MARGIN": 0.1,
   "GRT_RESIZER_HOLD_SLACK_MARGIN": 0.05,
