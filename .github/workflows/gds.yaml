@@ -1,5 +1,10 @@
 name: gds
 
+# DFT version of tt_um_rj_present: the layout is hardened locally with Difetto
+# (scan chain insertion, run dft1_eco) and submitted through custom_gds.
+# The stock "Build GDS" action is not used because it runs stock LibreLane,
+# which cannot insert the scan chain.
+
 on:
   push:
   workflow_dispatch:
@@ -13,10 +18,15 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Build GDS
-        uses: TinyTapeout/tt-gds-action@ttsky26d
+      - name: Publish the locally hardened GDS (custom_gds)
+        uses: TinyTapeout/tt-gds-action/custom_gds@ttsky26d
         with:
           pdk: sky130A
+          top_module: tt_um_rj_present
+          gds_path: gds/tt_um_rj_present.gds
+          lef_path: lef/tt_um_rj_present.lef
+          # powered netlist: the sky130 precheck power pin check needs VPWR/VGND
+          verilog_path: gl/tt_um_rj_present.v
 
   precheck:
     needs: gds
@@ -25,17 +35,61 @@ jobs:
       - name: Run Tiny Tapeout Precheck
         uses: TinyTapeout/tt-gds-action/precheck@ttsky26d
 
+  # Replaces TinyTapeout/tt-gds-action/gl_test: with custom_gds, pdk.json has
+  # no PDK_VERSION, so that action cannot install the PDK. Same steps, with the
+  # PDK version used to harden dft1_eco.
   gl_test:
     needs: gds
     runs-on: ubuntu-24.04
+    env:
+      PDK_ROOT: /home/runner/pdk
+      PDK_VERSION: 8afc8346a57fe1ab7934ba5a6056ea8b43078e71
     steps:
       - name: checkout repo
         uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - name: GL test
-        uses: TinyTapeout/tt-gds-action/gl_test@ttsky26d
+      - name: Install sky130 PDK
+        uses: TinyTapeout/ciel-action@v1
+        with:
+          pdk_name: sky130
+          pdk_version: ${{ env.PDK_VERSION }}
+          pdk_root: ${{ env.PDK_ROOT }}
+
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install Python packages
+        run: pip install -r test/requirements.txt
+
+      - name: Install iverilog
+        run: |
+          wget https://github.com/TinyTapeout/iverilog/releases/download/v13.0/iverilog_13.0-1_amd64.deb
+          sudo apt-get update -y
+          sudo apt-get install -y ./iverilog_13.0-1_amd64.deb
+
+      - name: Run gate-level tests on the submitted netlist
+        run: |
+          cp gl/tt_um_rj_present.v test/gate_level_netlist.v
+          cd test
+          rm -f tb.vcd tb.fst results.xml
+          make clean
+          GATES=yes make
+          # make returns success even if tests fail, so check results.xml
+          test -f results.xml
+          ! grep -E '<(failure|error)' results.xml
+
+      - name: Upload waveform and test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gatelevel_test_results
+          path: |
+            test/tb.fst
+            test/results.xml
 
   viewer:
     needs: gds

@@ -189,10 +189,16 @@ module tt_um_rj_present (
   // Outputs
   // ------------------------------------------------------------
   assign uo_out  = rdata_q;
-  assign uio_out = 8'h00;
-  assign uio_oe  = 8'h00;  // all uio pins are inputs
 
-  // Pins this design does not use; listed here to avoid lint warnings
-  wire _unused = &{ena, ui_in[6:5], 1'b0};
+  // DFT: scan out on uio[0]. In the RTL uio_out[0] is 0; after synthesis
+  // Difetto connects the top-level pin uio_out[0] to the last flip-flop of
+  // the scan chain. Its output enable follows ui_in[5] (scan enable), so
+  // uio[0] drives only while scanning and stays an input in normal use.
+  assign uio_out = 8'h00;
+  assign uio_oe  = {7'b0000000, ui_in[5]};
+
+  // List all unused inputs to prevent warnings. ui_in[6] (scan in) is
+  // connected by Difetto after synthesis, so it is unused in the RTL.
+  wire _unused = &{ena, ui_in[6], 1'b0};
 
 endmodule

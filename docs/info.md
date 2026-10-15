@@ -25,7 +25,9 @@ holds the ciphertext for one clock only.
 |------|----------|
 | `ui[4:0]` | byte address |
 | `ui[7]` | write strobe, active high (synchronised inside the chip) |
-| `uio[7:0]` | write data byte (all `uio` pins are inputs) |
+| `ui[5]` | scan enable, active high. Keep it low in normal use |
+| `ui[6]` | scan in (ignored while `ui[5]` is low) |
+| `uio[7:0]` | write data byte. All `uio` pins are inputs, except `uio[0]`, which becomes the scan output while `ui[5]` is high |
 | `uo[7:0]` | read data byte at the selected address |
 
 Multi-byte values are stored most significant byte first.
@@ -44,6 +46,8 @@ clears and done is set. Done stays set until the next start. Reset clears all re
 
 ## How to test
 
+Keep `ui[5]` (scan enable) low for normal use.
+
 1. Reset the chip.
 2. Write the 10 key bytes to addresses `0x00` to `0x09`.
 3. Write the 8 plaintext bytes to addresses `0x0A` to `0x11`.
@@ -52,7 +56,8 @@ clears and done is set. Done stays set until the next start. Reset clears all re
 6. Read the 8 ciphertext bytes from addresses `0x12` to `0x19`.
 
 To write a byte: set `ui[4:0]` to the address and `uio[7:0]` to the data, raise `ui[7]`, hold it for at
-least 3 clock cycles, then lower it. To read a byte: set `ui[4:0]` to the address and read `uo[7:0]` 2 or more
+least 3 clock cycles with the address and data unchanged, then lower it. Keep `ui[7]` low for at least 3
+clock cycles before the next write. To read a byte: set `ui[4:0]` to the address and read `uo[7:0]` 2 or more
 clock cycles later.
 
 Test vectors from the PRESENT paper (Appendix I):
@@ -63,6 +68,34 @@ Test vectors from the PRESENT paper (Appendix I):
 | `0000000000000000` | `ffffffffffffffffffff` | `e72c46c0f5945049` |
 | `ffffffffffffffff` | `00000000000000000000` | `a112ffc72f68417b` |
 | `ffffffffffffffff` | `ffffffffffffffffffff` | `3333dcd3213210d2` |
+
+## Scan chain test
+
+The design also contains a scan chain for manufacturing test (design for test). It was inserted with
+Difetto (OpenROAD scan insertion with placement-aware chain ordering), so the layout is hardened locally
+and submitted as a custom GDS. All 378 flip-flops are in one chain. The chain is shifted on the normal
+clock `clk`. Scan in is `ui[6]`, scan out is `uio[0]`, and scan enable is `ui[5]`. While `ui[5]` is
+high, `uio[0]` is driven by the chip; while it is low, `uio[0]` is the normal `wdata[0]` input.
+
+One test pattern is applied as follows:
+
+1. Keep `rst_n` high. Release `uio[0]` (make it an input on the RP2040), then set `ui[5]` high.
+2. Shift the 378 flip-flop values in on `ui[6]`, one per rising clock edge.
+3. Set `ui[5]` low, then drive `uio[0]` again, and set the other `ui` and `uio` inputs from the pattern.
+   Check `uo[7:0]` against the expected values.
+4. Give one clock (the capture clock).
+5. Release `uio[0]`, set `ui[5]` high, and shift the 378 captured values out on `uio[0]` while the next
+   pattern shifts in.
+
+After the last pattern, set `ui[5]` low and reset the chip before normal use, because the scan test leaves
+arbitrary values in the registers.
+
+The test patterns were generated with quaigh: 242 patterns give 99.60% coverage of single stuck-at
+faults (6,671 of 6,698 collapsed faults). This number covers the logic after scan insertion; it does not
+include delay faults or the buffers added later during placement and routing, including three buffers added
+after routing to keep every net within the 0.75 ns slew limit. The chain itself is checked separately by
+shifting a known bit stream through it. All 242 patterns were replayed on the final routed gate-level
+netlist in simulation with no mismatches.
 
 ## External hardware
 
